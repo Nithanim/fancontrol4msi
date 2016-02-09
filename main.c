@@ -45,6 +45,7 @@ void showHelp() {
     printf("The last 77 might be the temp where the 100 speed triggers but this is only speculation.\n");
     printf("And yes, this bypasses the GUI which might show nothing or completely off values.\n");
     printf("\nBY USING THIS PROGAM YOU ACKNOWLEDGE THAT YOU ARE USING IT AT YOUR OWN RISK AND I AM NOT RESPONSIBLE FOR ANY DAMAGES IN ANY WAY!");
+    printf("This program proudly uses libconfigini (https://github.com/taneryilmaz/libconfigini/)");
 }
 
 int main(int argc, char** argv) {
