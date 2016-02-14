@@ -4,14 +4,23 @@
 #include <errno.h>
 #include "configini.h"
 
+#define CONFIG_FILE "settings.cfg"
+
 #define MSI_SERVICE_NAME "MSISuperIO_CC"
 #define MSI_WM_SET_FAN_TEMP_CONTROL 0xB3
-#define CONFIG_FILE "C:\\MSI\\Command Center\\MSISuperIO.cfg"
+#define MSI_CONFIG_FILE "C:\\MSI\\Command Center\\MSISuperIO.cfg"
+
+#define MAX(a,b) (a>b?a:b)
+
+struct Settings {
+    unsigned int timeToWaitForServiceToStart;
+    unsigned int timeBetweenFanCommands;
+};
 
 void printLastError();
 
 WINBOOL openConfigFile(Config** cfg) {
-    ConfigRet ret = ConfigReadFile(CONFIG_FILE, cfg);
+    ConfigRet ret = ConfigReadFile(MSI_CONFIG_FILE, cfg);
     if (ret != CONFIG_OK) {
         if (ret == CONFIG_ERR_INVALID_PARAM) {
             printf("Invalid param");
@@ -48,6 +57,20 @@ void showHelp() {
     printf("This program proudly uses libconfigini (https://github.com/taneryilmaz/libconfigini/)");
 }
 
+void readSettings(struct Settings* settings) {
+    Config *cfg = NULL;
+    ConfigRet ret = ConfigReadFile(CONFIG_FILE, &cfg);
+
+    if (ret == CONFIG_OK) {
+        ConfigReadInt(cfg, "sleep", "timeToWaitForServiceToStart", &settings->timeToWaitForServiceToStart, 2000);
+        ConfigReadInt(cfg, "sleep", "timeBetweenFanCommands", &settings->timeBetweenFanCommands, 1000);
+        ConfigFree(cfg);
+    } else {
+        settings->timeToWaitForServiceToStart = 2000;
+        settings->timeBetweenFanCommands = 1000;
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc <= 1) {
         showHelp();
@@ -56,8 +79,11 @@ int main(int argc, char** argv) {
     Config *cfg = NULL;
     int error = 0;
 
+    struct Settings settings;
+    readSettings(&settings);
+
     //Fix for fopen not able to write hidden file
-    SetFileAttributesA(CONFIG_FILE, FILE_ATTRIBUTE_NORMAL);
+    SetFileAttributesA(MSI_CONFIG_FILE, FILE_ATTRIBUTE_NORMAL);
 
     openConfigFile(&cfg);
 
@@ -71,11 +97,25 @@ int main(int argc, char** argv) {
     }
 
     //Try to start the server
-    SC_HANDLE service = OpenServiceA(serviceControl, MSI_SERVICE_NAME, SERVICE_START);
+    SC_HANDLE service = OpenServiceA(serviceControl, MSI_SERVICE_NAME, SERVICE_START | SERVICE_QUERY_STATUS);
     if (service != NULL) {
         if (StartServiceA(service, 0, NULL) != 0) {
-            printf("Started service\n");
-            Sleep(2000); //Wait a little bit until the service is ready
+            SERVICE_STATUS sStatus;
+            do {
+                if (QueryServiceStatus(service, &sStatus) != 0) {
+                    Sleep(MAX(sStatus.dwWaitHint, settings.timeToWaitForServiceToStart));
+                } else {
+                    printf("Unable to read service status: ");
+                    printLastError();
+                    break;
+                }
+            } while (sStatus.dwCurrentState == SERVICE_START_PENDING
+                    || sStatus.dwCurrentState == SERVICE_CONTINUE_PENDING);
+            if (sStatus.dwCurrentState == SERVICE_RUNNING) {
+                printf("Started service\n");
+            } else {
+                printf("Unable to start service! State is %d.\n", sStatus.dwCurrentState);
+            }
         } else {
             if (GetLastError() == ERROR_SERVICE_ALREADY_RUNNING) {
                 letServiceRunning = TRUE;
@@ -102,9 +142,9 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; i++) {
         ConfigAddString(cfg, "hw_setFanTempControl", "FanControl", argv[i]);
 
-        ConfigRet ret = ConfigPrintToFile(cfg, CONFIG_FILE);
+        ConfigRet ret = ConfigPrintToFile(cfg, MSI_CONFIG_FILE);
         if (ret != CONFIG_OK) {
-            printf("Unable to write to file %s! >%d/%x<\n", CONFIG_FILE, ret, ret);
+            printf("Unable to write to file %s! >%d/%x<\n", MSI_CONFIG_FILE, ret, ret);
             printf("Errno is %d\n", errno);
             error = 1;
             break;
@@ -117,7 +157,7 @@ int main(int argc, char** argv) {
             printf("Status: %d\n", ssStatus.dwCurrentState);
             //Give the service some time to act. Probably not needed
             //but better safe than sorry
-            Sleep(1000); 
+            Sleep(settings.timeBetweenFanCommands);
         } else {
             printf("COMMAND NOT SENT!\n");
             printLastError();
